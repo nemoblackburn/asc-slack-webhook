@@ -1,0 +1,10 @@
+name = "asc-slack-webhook"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Secrets (set via `wrangler secret put`):
+# - ASC_WEBHOOK_SECRET: Shared secret from App Store Connect webhook config
+# - SLACK_WEBHOOK_URL: Slack incoming webhook URL
+# - ASC_KEY_ID: App Store Connect API Key ID (optional, for version info)
+# - ASC_ISSUER_ID: App Store Connect Issuer ID (optional, for version info)
+# - ASC_API_KEY: App Store Connect API private key contents (optional, for version info)
