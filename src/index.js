@@ -79,8 +79,10 @@ function extractApiUrl(payload) {
 async function fetchVersionInfo(apiUrl, env) {
   const token = await generateJwt(env.ASC_KEY_ID, env.ASC_ISSUER_ID, env.ASC_API_KEY);
 
-  // Include build relationship to get build number
-  const urlWithInclude = apiUrl.includes('?') ? `${apiUrl}&include=build` : `${apiUrl}?include=build`;
+  // Include build and app relationships
+  const urlWithInclude = apiUrl.includes('?')
+    ? `${apiUrl}&include=build,app`
+    : `${apiUrl}?include=build,app`;
 
   const response = await fetch(urlWithInclude, {
     headers: {
@@ -96,16 +98,21 @@ async function fetchVersionInfo(apiUrl, env) {
   const data = await response.json();
   const attrs = data.data?.attributes || {};
 
-  // Build number comes from included build resource
+  // Build number and app ID come from included resources
   let buildNumber = null;
+  let appId = null;
   if (data.included) {
     const build = data.included.find((r) => r.type === 'builds');
     buildNumber = build?.attributes?.version || null;
+
+    const app = data.included.find((r) => r.type === 'apps');
+    appId = app?.id || null;
   }
 
   return {
     version: attrs.versionString || null,
     buildNumber: buildNumber,
+    appId: appId,
   };
 }
 
@@ -227,20 +234,40 @@ function timingSafeEqual(a, b) {
 function formatSlackMessage(payload, versionInfo) {
   const eventType = payload.data?.type || payload.notificationType || 'UNKNOWN';
   const data = payload.data || payload;
+  const state = extractState(data);
 
   const message = formatEventMessage(eventType, data, payload, versionInfo);
 
-  return {
-    blocks: [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: message,
-        },
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: message,
       },
-    ],
-  };
+    },
+  ];
+
+  // Add release button for pending developer release
+  if (state === 'PENDING_DEVELOPER_RELEASE' && versionInfo?.appId) {
+    blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: 'Open in App Store Connect →',
+            emoji: true,
+          },
+          url: `https://appstoreconnect.apple.com/apps/${versionInfo.appId}/distribution/ios/version/inflight`,
+          style: 'primary',
+        },
+      ],
+    });
+  }
+
+  return { blocks };
 }
 
 /**
