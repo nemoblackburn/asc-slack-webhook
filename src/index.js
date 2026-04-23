@@ -69,8 +69,21 @@ export default {
  * Extract API URL from payload relationships
  */
 function extractApiUrl(payload) {
-  const links = payload.data?.relationships?.instance?.links;
-  return links?.self || links?.related || null;
+  const relationships = payload.data?.relationships || {};
+
+  // Try instance first (most common)
+  const instanceLinks = relationships.instance?.links;
+  if (instanceLinks?.self || instanceLinks?.related) {
+    return instanceLinks.self || instanceLinks.related;
+  }
+
+  // Try build relationship for some event types
+  const buildLinks = relationships.build?.links;
+  if (buildLinks?.self || buildLinks?.related) {
+    return buildLinks.self || buildLinks.related;
+  }
+
+  return null;
 }
 
 /**
@@ -83,9 +96,15 @@ async function fetchVersionInfo(apiUrl, env) {
     'Content-Type': 'application/json',
   };
 
-  // Handle buildUploads differently - need to follow relationship to build
+  // buildUploads don't have a direct relationship to builds - they're separate resources
+  // We can only get version info from other event types
   if (apiUrl.includes('/buildUploads/')) {
-    return fetchBuildUploadVersionInfo(apiUrl, headers);
+    return { version: null, buildNumber: null, appId: null };
+  }
+
+  // Handle builds directly
+  if (apiUrl.includes('/builds/')) {
+    return fetchBuildVersionInfo(apiUrl, headers);
   }
 
   // For appStoreVersions, include build and app
@@ -120,26 +139,14 @@ async function fetchVersionInfo(apiUrl, env) {
 }
 
 /**
- * Fetch version info for buildUploads by following relationships
+ * Fetch version info directly from a build URL
  */
-async function fetchBuildUploadVersionInfo(apiUrl, headers) {
-  // First fetch the buildUpload to get the build relationship
-  const uploadResponse = await fetch(apiUrl, { headers });
-  if (!uploadResponse.ok) {
-    throw new Error(`ASC API error: ${uploadResponse.status}`);
-  }
+async function fetchBuildVersionInfo(apiUrl, headers) {
+  const buildUrl = apiUrl.includes('?')
+    ? `${apiUrl}&include=preReleaseVersion,app`
+    : `${apiUrl}?include=preReleaseVersion,app`;
 
-  const uploadData = await uploadResponse.json();
-  const buildLink = uploadData.data?.relationships?.build?.links?.related;
-
-  if (!buildLink) {
-    return { version: null, buildNumber: null, appId: null };
-  }
-
-  // Fetch the build with preReleaseVersion and app included
-  const buildUrl = `${buildLink}?include=preReleaseVersion,app`;
   const buildResponse = await fetch(buildUrl, { headers });
-
   if (!buildResponse.ok) {
     throw new Error(`ASC API error: ${buildResponse.status}`);
   }
@@ -342,7 +349,7 @@ function formatEventMessage(eventType, data, fullPayload, versionInfo) {
       return `${emoji} *${appName}${versionStr}* — ${status}`;
     }
 
-    // Build upload events
+    // Build upload events (version info not available from API)
     case 'buildUploadStateUpdated':
     case 'buildUploadStateChanged':
     case 'BUILD_UPLOAD_STATE_CHANGED': {
@@ -353,6 +360,7 @@ function formatEventMessage(eventType, data, fullPayload, versionInfo) {
 
     // TestFlight beta events
     case 'buildBetaStateChanged':
+    case 'buildBetaDetailExternalBuildStateUpdated':
     case 'BUILD_BETA_STATE_CHANGED': {
       const emoji = getBetaStateEmoji(state);
       const status = humanizeBetaState(state);
@@ -522,8 +530,8 @@ function humanizeState(state) {
  */
 function humanizeUploadState(state) {
   const stateMap = {
-    PROCESSING: 'Build processing',
-    COMPLETE: 'Build available in TestFlight',
+    PROCESSING: 'Build uploading',
+    COMPLETE: 'Build uploaded',
     FAILED: 'Build upload failed',
     INVALID: 'Build invalid',
     VALID: 'Build upload completed',
