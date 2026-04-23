@@ -78,18 +78,22 @@ function extractApiUrl(payload) {
  */
 async function fetchVersionInfo(apiUrl, env) {
   const token = await generateJwt(env.ASC_KEY_ID, env.ASC_ISSUER_ID, env.ASC_API_KEY);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
 
-  // Include build and app relationships
+  // Handle buildUploads differently - need to follow relationship to build
+  if (apiUrl.includes('/buildUploads/')) {
+    return fetchBuildUploadVersionInfo(apiUrl, headers);
+  }
+
+  // For appStoreVersions, include build and app
   const urlWithInclude = apiUrl.includes('?')
     ? `${apiUrl}&include=build,app`
     : `${apiUrl}?include=build,app`;
 
-  const response = await fetch(urlWithInclude, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  const response = await fetch(urlWithInclude, { headers });
 
   if (!response.ok) {
     throw new Error(`ASC API error: ${response.status}`);
@@ -98,7 +102,6 @@ async function fetchVersionInfo(apiUrl, env) {
   const data = await response.json();
   const attrs = data.data?.attributes || {};
 
-  // Build number and app ID come from included resources
   let buildNumber = null;
   let appId = null;
   if (data.included) {
@@ -112,6 +115,51 @@ async function fetchVersionInfo(apiUrl, env) {
   return {
     version: attrs.versionString || null,
     buildNumber: buildNumber,
+    appId: appId,
+  };
+}
+
+/**
+ * Fetch version info for buildUploads by following relationships
+ */
+async function fetchBuildUploadVersionInfo(apiUrl, headers) {
+  // First fetch the buildUpload to get the build relationship
+  const uploadResponse = await fetch(apiUrl, { headers });
+  if (!uploadResponse.ok) {
+    throw new Error(`ASC API error: ${uploadResponse.status}`);
+  }
+
+  const uploadData = await uploadResponse.json();
+  const buildLink = uploadData.data?.relationships?.build?.links?.related;
+
+  if (!buildLink) {
+    return { version: null, buildNumber: null, appId: null };
+  }
+
+  // Fetch the build with preReleaseVersion and app included
+  const buildUrl = `${buildLink}?include=preReleaseVersion,app`;
+  const buildResponse = await fetch(buildUrl, { headers });
+
+  if (!buildResponse.ok) {
+    throw new Error(`ASC API error: ${buildResponse.status}`);
+  }
+
+  const buildData = await buildResponse.json();
+  const buildAttrs = buildData.data?.attributes || {};
+
+  let version = null;
+  let appId = null;
+  if (buildData.included) {
+    const preReleaseVersion = buildData.included.find((r) => r.type === 'preReleaseVersions');
+    version = preReleaseVersion?.attributes?.version || null;
+
+    const app = buildData.included.find((r) => r.type === 'apps');
+    appId = app?.id || null;
+  }
+
+  return {
+    version: version,
+    buildNumber: buildAttrs.version || null,
     appId: appId,
   };
 }
